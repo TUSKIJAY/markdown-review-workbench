@@ -61,17 +61,17 @@
 
 ### 使用绿色版
 
-内部发版时，Windows 用户可以直接运行绿色版：
+如果你已经拿到内部分发的 Windows 绿色版，可以直接运行：
 
 ```text
 output/portable/Markdown文档审阅标注工作台/Markdown文档审阅标注工作台.exe
 ```
 
-绿色版属于本地分发产物，不随源码仓库提交。它不需要安装，不需要联网。若出现白屏或闪退，安装一次 Microsoft WebView2 Runtime 即可。
+绿色版属于本地分发产物，不随源码仓库提交；GitHub 源码仓库只保存构建脚本和更新 SOP。绿色版不需要安装，不需要联网。若出现白屏或闪退，安装一次 Microsoft WebView2 Runtime 即可。
 
 ### 使用单文件 HTML
 
-也可以构建单文件 HTML 后直接打开：
+从源码使用时，可以先构建单文件 HTML 后直接打开：
 
 ```text
 output/markdown-review-workbench.html
@@ -118,6 +118,13 @@ npm run tauri:build -- --no-bundle
 ```
 
 日常验收如果只刷新绿色版，请遵守 [绿色版更新 SOP](docs/packaging/绿色版更新SOP.md)，不要误刷 MSI、NSIS、zip 或版本号。
+
+## 项目文档入口
+
+- [docs/README.md](docs/README.md)：项目文档索引，按 product / development / packaging / status / handoff / optimization 分区。
+- [AGENTS.md](AGENTS.md)：未来 Codex / Claude 接手本仓库的地图。
+- [docs/handoff/session-handoff.md](docs/handoff/session-handoff.md)：当前接手状态、下一步和风险。
+- [docs/status/PROGRESS.md](docs/status/PROGRESS.md)：历史状态账本和能力索引。
 
 ## 项目结构
 
