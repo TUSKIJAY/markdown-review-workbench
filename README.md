@@ -4,6 +4,13 @@
 
 适合技术方案、投标稿、产品文档、汇报材料、Word 草稿这类需要反复审阅和定点修改的文档工作。
 
+## 当前仓库入口
+
+- [docs/README.md](docs/README.md)：项目文档索引，按 product / development / packaging / status / handoff / optimization 分区。
+- [AGENTS.md](AGENTS.md)：未来 Codex / Claude 接手本仓库的地图。
+- [docs/handoff/session-handoff.md](docs/handoff/session-handoff.md)：当前接手状态、下一步和风险。
+- [docs/status/PROGRESS.md](docs/status/PROGRESS.md)：历史状态账本和能力索引。
+
 ![工作台演示](assets/demo/markdown-review-workflow.gif)
 
 ## 它解决什么问题
@@ -118,13 +125,6 @@ npm run tauri:build -- --no-bundle
 ```
 
 日常验收如果只刷新绿色版，请遵守 [绿色版更新 SOP](docs/packaging/绿色版更新SOP.md)，不要误刷 MSI、NSIS、zip 或版本号。
-
-## 项目文档入口
-
-- [docs/README.md](docs/README.md)：项目文档索引，按 product / development / packaging / status / handoff / optimization 分区。
-- [AGENTS.md](AGENTS.md)：未来 Codex / Claude 接手本仓库的地图。
-- [docs/handoff/session-handoff.md](docs/handoff/session-handoff.md)：当前接手状态、下一步和风险。
-- [docs/status/PROGRESS.md](docs/status/PROGRESS.md)：历史状态账本和能力索引。
 
 ## 项目结构
 

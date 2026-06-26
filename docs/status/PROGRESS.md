@@ -67,7 +67,7 @@ V0.3 已支持 Word `.docx` 兼容导入。React/Vite 浏览器版本、单文�
 
 ### Completed（已完成）
 
-- [x] 2026-06-26 — 更新 GitHub 展示页 `README.md`：明确绿色版属于内部分发产物、不随源码仓库提交；补充 `docs/README.md`、`AGENTS.md`、`docs/handoff/session-handoff.md`、`docs/status/PROGRESS.md` 等项目文档入口。
+- [x] 2026-06-26 — 更新 GitHub 首页 `README.md`：首屏前移“当前仓库入口”，明确 `docs/README.md`、`AGENTS.md`、`docs/handoff/session-handoff.md`、`docs/status/PROGRESS.md`；同时说明绿色版属于内部分发产物、不随源码仓库提交。
 - [x] 2026-06-26 — 状态文档模型改造：新增 `docs/handoff/session-handoff.md` 作为当前接手 index；`docs/status/PROGRESS.md` 改为唯一历史 log 库，并在开头补 `Current Snapshot`、`Feature Status Index`、`Decision Index`、`Risk / Blocker Index`；同步更新 `AGENTS.md` 与 `docs/README.md` 的状态文档入口。
 - [x] 2026-06-26 — 根目录新增 `Makefile` 作为开发快捷入口，代理 `src/app` 下的 install/dev/build/build-html/preview/tauri-dev/tauri-build-no-bundle；不提供完整打包目标，避免误刷 MSI/NSIS。
 - [x] 2026-06-26 — 根目录文档按 harness 思路收敛：`AGENTS.md` 改为中文 Agent 接手地图；`INSTRUCTIONS.md` 下沉为 `docs/development/project-rules.md`；`PROGRESS.md` 下沉为 `docs/status/PROGRESS.md`；`SOP-绿色版更新.md` 下沉为 `docs/packaging/绿色版更新SOP.md`；同步更新 `README.md` 与 `docs/README.md` 的文档入口。
