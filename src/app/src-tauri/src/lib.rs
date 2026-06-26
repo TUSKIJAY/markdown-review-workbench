@@ -64,6 +64,19 @@ struct WriteReviewFilesResult {
     updated_at: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExistingReviewFiles {
+    ai_notes: Option<String>,
+    review: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkdownImageAsset {
+    data_url: String,
+}
+
 fn normalize_line_endings(markdown: &str) -> String {
     markdown.replace("\r\n", "\n").replace('\r', "\n")
 }
@@ -93,6 +106,20 @@ fn source_format_from_path(path: &Path) -> Option<&'static str> {
         .and_then(|extension| match extension.to_ascii_lowercase().as_str() {
             "md" | "markdown" => Some("markdown"),
             "docx" => Some("docx"),
+            _ => None,
+        })
+}
+
+fn image_mime_from_path(path: &Path) -> Option<&'static str> {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .and_then(|extension| match extension.to_ascii_lowercase().as_str() {
+            "png" => Some("image/png"),
+            "jpg" | "jpeg" => Some("image/jpeg"),
+            "gif" => Some("image/gif"),
+            "webp" => Some("image/webp"),
+            "svg" => Some("image/svg+xml"),
+            "bmp" => Some("image/bmp"),
             _ => None,
         })
 }
@@ -219,20 +246,6 @@ fn collect_document_files(folder: &Path, depth: usize, files: &mut Vec<FolderDoc
 }
 
 #[tauri::command]
-async fn open_word_file(app: tauri::AppHandle) -> Result<LoadedBinaryDocument, String> {
-    let file_path = app
-        .dialog()
-        .file()
-        .add_filter("Word", &["docx"])
-        .blocking_pick_file()
-        .ok_or_else(|| "cancelled".to_string())?
-        .into_path()
-        .map_err(|error| format!("无法解析文件路径: {error}"))?;
-
-    read_binary_document_from_path(&file_path)
-}
-
-#[tauri::command]
 async fn open_document_file(app: tauri::AppHandle) -> Result<LoadedSourceDocument, String> {
     let file_path = app
         .dialog()
@@ -254,30 +267,6 @@ async fn read_document_file(path: String) -> Result<LoadedSourceDocument, String
 }
 
 #[tauri::command]
-async fn read_word_file(path: String) -> Result<LoadedBinaryDocument, String> {
-    read_binary_document_from_path(Path::new(&path))
-}
-
-#[tauri::command]
-async fn open_markdown_file(app: tauri::AppHandle) -> Result<LoadedDocument, String> {
-    let file_path = app
-        .dialog()
-        .file()
-        .add_filter("Markdown", &["md", "markdown"])
-        .blocking_pick_file()
-        .ok_or_else(|| "cancelled".to_string())?
-        .into_path()
-        .map_err(|error| format!("无法解析文件路径: {error}"))?;
-
-    read_document_from_path(&file_path)
-}
-
-#[tauri::command]
-async fn read_markdown_file(path: String) -> Result<LoadedDocument, String> {
-    read_document_from_path(Path::new(&path))
-}
-
-#[tauri::command]
 async fn open_markdown_folder(app: tauri::AppHandle) -> Result<OpenedFolder, String> {
     let folder_path = app
         .dialog()
@@ -295,19 +284,6 @@ async fn open_markdown_folder(app: tauri::AppHandle) -> Result<OpenedFolder, Str
         folder_path: path_to_string(&folder_path),
         files,
     })
-}
-
-#[tauri::command]
-async fn list_markdown_files(folder_path: String) -> Result<Vec<FolderDocumentFile>, String> {
-    let folder = PathBuf::from(folder_path);
-    if !folder.is_dir() {
-        return Err("路径不是文件夹".to_string());
-    }
-
-    let mut files = Vec::new();
-    collect_document_files(&folder, 0, &mut files)?;
-    files.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(files)
 }
 
 #[tauri::command]
@@ -345,19 +321,73 @@ async fn write_review_files(
     })
 }
 
+// 读取源文件同目录已存在的 sidecar 内容，供前端在自动同步前比对是否被外部改动。
+// 文件不存在时对应字段返回 None，不视为错误。
+#[tauri::command]
+async fn read_review_files(source_path: String) -> Result<ExistingReviewFiles, String> {
+    let source = PathBuf::from(source_path);
+    let parent = source
+        .parent()
+        .ok_or_else(|| "无法定位源文件所在目录".to_string())?;
+    let stem = source
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or_else(|| "无法读取源文件名".to_string())?;
+
+    let ai_notes_path = parent.join(format!("{stem}.ai-notes.json"));
+    let review_path = parent.join(format!("{stem}.review.md"));
+
+    Ok(ExistingReviewFiles {
+        ai_notes: fs::read_to_string(&ai_notes_path).ok(),
+        review: fs::read_to_string(&review_path).ok(),
+    })
+}
+
+// 读取 Markdown 中的相对图片引用。仅允许访问源 Markdown 所在目录及子目录下的图片，
+// 避免预览图片功能变成任意本地文件读取。
+#[tauri::command]
+async fn read_markdown_image(source_path: String, image_path: String) -> Result<MarkdownImageAsset, String> {
+    if image_path.contains("://") || image_path.starts_with('/') || image_path.starts_with('\\') {
+        return Err("仅支持相对图片路径".to_string());
+    }
+
+    let source = PathBuf::from(source_path);
+    if !source.is_file() || !is_markdown_path(&source) {
+        return Err("源 Markdown 文件不存在".to_string());
+    }
+
+    let parent = source
+        .parent()
+        .ok_or_else(|| "无法定位源文件所在目录".to_string())?;
+    let parent = parent
+        .canonicalize()
+        .map_err(|error| format!("无法解析源文件目录: {error}"))?;
+    let candidate = parent.join(image_path);
+    let candidate = candidate
+        .canonicalize()
+        .map_err(|error| format!("图片不存在或无法读取: {error}"))?;
+
+    if !candidate.starts_with(&parent) {
+        return Err("图片路径超出源文档目录".to_string());
+    }
+
+    let mime = image_mime_from_path(&candidate).ok_or_else(|| "不支持的图片格式".to_string())?;
+    let bytes = fs::read(&candidate).map_err(|error| format!("读取图片失败: {error}"))?;
+    Ok(MarkdownImageAsset {
+        data_url: format!("data:{mime};base64,{}", general_purpose::STANDARD.encode(bytes)),
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            open_markdown_file,
-            read_markdown_file,
             open_document_file,
             read_document_file,
-            open_word_file,
-            read_word_file,
             open_markdown_folder,
-            list_markdown_files,
+            read_review_files,
+            read_markdown_image,
             write_review_files
         ])
         .run(tauri::generate_context!())

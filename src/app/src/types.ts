@@ -8,6 +8,10 @@ export type ExpectedAction = 'rewrite' | 'expand' | 'tighten' | 'verify' | 'form
 
 export type SourceFormat = 'markdown' | 'docx';
 
+export type ReviewMode = 'comment' | 'revision';
+
+export type RevisionType = 'replace' | 'delete' | 'insert';
+
 export interface MarkdownBlock {
   id: string;
   index: number;
@@ -38,6 +42,14 @@ export interface ReviewNote {
   headingPath: string[];
   originalMarkdown: string;
   selectedText?: string;
+  selectionRange?: {
+    startOffset: number;
+    endOffset: number;
+    text: string;
+  };
+  mode?: ReviewMode;
+  revisionType?: RevisionType;
+  replacementText?: string;
   instruction: string;
   expectedAction: ExpectedAction;
   priority: NotePriority;

@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { FolderMarkdownFile, LoadedDocument } from '../types';
+import type { FolderMarkdownFile } from '../types';
 
 export interface OpenedFolder {
   folderPath: string;
@@ -10,13 +10,6 @@ export interface WriteReviewFilesResult {
   aiNotesPath: string;
   reviewPath: string;
   updatedAt: string;
-}
-
-export interface LoadedBinaryDocument {
-  fileName: string;
-  filePath: string;
-  sourceFormat: 'docx';
-  bytesBase64: string;
 }
 
 export interface LoadedSourceDocument {
@@ -30,16 +23,22 @@ export interface LoadedSourceDocument {
   conversionMessages: string[];
 }
 
+// 桌面模式下原文目录已存在的 sidecar 内容；文件不存在时对应字段为 null。
+export interface ExistingReviewFiles {
+  aiNotes: string | null;
+  review: string | null;
+}
+
+export interface MarkdownImageAsset {
+  dataUrl: string;
+}
+
 export function isTauriRuntime() {
   return typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__);
 }
 
 export function isTauriCancel(error: unknown) {
   return typeof error === 'string' && error === 'cancelled';
-}
-
-export function openMarkdownFileWithTauri() {
-  return invoke<LoadedDocument>('open_markdown_file');
 }
 
 export function openDocumentFileWithTauri() {
@@ -50,24 +49,16 @@ export function readDocumentFileWithTauri(path: string) {
   return invoke<LoadedSourceDocument>('read_document_file', { path });
 }
 
-export function readMarkdownFileWithTauri(path: string) {
-  return invoke<LoadedDocument>('read_markdown_file', { path });
-}
-
-export function openWordFileWithTauri() {
-  return invoke<LoadedBinaryDocument>('open_word_file');
-}
-
-export function readWordFileWithTauri(path: string) {
-  return invoke<LoadedBinaryDocument>('read_word_file', { path });
-}
-
 export function openMarkdownFolderWithTauri() {
   return invoke<OpenedFolder>('open_markdown_folder');
 }
 
-export function listMarkdownFilesWithTauri(folderPath: string) {
-  return invoke<FolderMarkdownFile[]>('list_markdown_files', { folderPath });
+export function readReviewFilesWithTauri(sourcePath: string) {
+  return invoke<ExistingReviewFiles>('read_review_files', { sourcePath });
+}
+
+export function readMarkdownImageWithTauri(sourcePath: string, imagePath: string) {
+  return invoke<MarkdownImageAsset>('read_markdown_image', { sourcePath, imagePath });
 }
 
 export function writeReviewFilesWithTauri(

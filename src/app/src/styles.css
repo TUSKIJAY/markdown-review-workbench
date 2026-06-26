@@ -71,6 +71,7 @@ button {
   border-width: 0 0 0 1px;
   padding: 18px 16px;
   gap: 14px;
+  overflow: hidden;
 }
 
 .workspace {
@@ -78,6 +79,7 @@ button {
   grid-template-rows: 64px 1fr;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
 .brand-row,
@@ -85,6 +87,7 @@ button {
 .inspector-header,
 .section-title,
 .field-row,
+.mode-row,
 .block-chrome,
 .topbar-actions,
 .rail-actions,
@@ -146,7 +149,8 @@ button {
 .outline-item,
 .folder-file,
 .note-main,
-.icon-button {
+.icon-button,
+.inline-toggle-button {
   cursor: pointer;
   transition:
     background 0.16s ease,
@@ -210,6 +214,24 @@ select:disabled,
 textarea:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.inline-toggle-button {
+  flex-shrink: 0;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid #c9ded1;
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 760;
+  white-space: nowrap;
+}
+
+.inline-toggle-button:hover {
+  border-color: #a9ccb8;
+  background: var(--accent-soft);
 }
 
 .search-box {
@@ -341,6 +363,9 @@ textarea:disabled {
 }
 
 .topbar {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
   justify-content: space-between;
   gap: 16px;
   padding: 0 20px;
@@ -351,24 +376,35 @@ textarea:disabled {
 
 .doc-title {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   gap: 3px;
 }
 
 .doc-title span {
   display: block;
-  max-width: 520px;
+  max-width: min(520px, 100%);
   font-size: 15px;
   font-weight: 760;
 }
 
 .doc-title small {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 12px;
 }
 
 .topbar-actions {
   gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   flex-shrink: 0;
 }
 
@@ -399,15 +435,30 @@ textarea:disabled {
   box-shadow: 0 1px 4px rgba(24, 39, 31, 0.08);
 }
 
+.segmented.compact {
+  min-height: 30px;
+  flex-shrink: 0;
+}
+
+.segmented button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .document-stage {
   min-height: 0;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
   overflow: auto;
+  overflow-x: hidden;
   padding: 24px;
 }
 
 .document-preview,
 .source-pane,
 .empty-state {
+  width: 100%;
   max-width: 980px;
   margin: 0 auto;
 }
@@ -420,6 +471,8 @@ textarea:disabled {
 
 .review-block {
   position: relative;
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
@@ -466,9 +519,12 @@ textarea:disabled {
 
 .markdown-body {
   min-width: 0;
+  max-width: 100%;
   color: #1b231f;
   font-size: 15px;
   line-height: 1.76;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .markdown-body > :first-child {
@@ -486,6 +542,9 @@ textarea:disabled {
   color: #111a16;
   letter-spacing: 0;
   line-height: 1.35;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .markdown-body h1 {
@@ -514,6 +573,7 @@ textarea:disabled {
 .markdown-body blockquote,
 .markdown-body pre,
 .markdown-body table {
+  max-width: 100%;
   margin: 0 0 12px;
 }
 
@@ -528,6 +588,8 @@ textarea:disabled {
 
 .markdown-body pre {
   overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -550,8 +612,10 @@ textarea:disabled {
 
 .markdown-body table {
   width: 100%;
+  min-width: 0;
   border-collapse: collapse;
   font-size: 14px;
+  table-layout: fixed;
 }
 
 .markdown-body th,
@@ -559,6 +623,7 @@ textarea:disabled {
   padding: 8px 10px;
   border: 1px solid var(--border);
   vertical-align: top;
+  overflow-wrap: anywhere;
 }
 
 .markdown-body th {
@@ -566,9 +631,92 @@ textarea:disabled {
   font-weight: 750;
 }
 
+.markdown-body img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 8px auto 12px;
+}
+
+.markdown-image-placeholder {
+  display: inline-flex;
+  max-width: 100%;
+  flex-direction: column;
+  gap: 3px;
+  margin: 4px 0 8px;
+  padding: 8px 10px;
+  border: 1px dashed #c9d8d0;
+  border-radius: 7px;
+  background: #f7faf8;
+  color: #405248;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.markdown-image-placeholder strong {
+  color: #24332b;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.markdown-image-placeholder small {
+  color: var(--quiet);
+  font-size: 12px;
+}
+
+.annotation-mark {
+  position: relative;
+  padding: 1px 3px;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.annotation-mark.comment-mark {
+  background: #fff1b8;
+  box-shadow: inset 0 -2px 0 #d9a441;
+}
+
+.annotation-mark.revision-mark {
+  background: #eef7ff;
+  box-shadow: inset 0 -2px 0 #6c9fc8;
+}
+
+.annotation-mark.revision-delete {
+  background: #fff0ef;
+  color: #7f2d28;
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+}
+
+.annotation-mark.revision-replace {
+  background: #fff4df;
+  text-decoration: line-through;
+  text-decoration-color: #a85f1f;
+}
+
+.annotation-mark.active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.revision-insert-text {
+  display: inline;
+  margin-left: 4px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: #dff2e6;
+  color: #14583a;
+  text-decoration: none;
+  font-weight: 650;
+}
+
 .source-pane {
   display: block;
   width: 100%;
+  max-width: 100%;
   min-height: calc(100vh - 118px);
   resize: none;
   padding: 18px;
@@ -580,6 +728,8 @@ textarea:disabled {
   font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
   font-size: 13px;
   line-height: 1.7;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
   box-shadow: var(--shadow);
 }
 
@@ -682,10 +832,13 @@ textarea:disabled {
 
 .word-body {
   min-width: 0;
+  max-width: 100%;
   font-family: inherit;
   font-size: inherit;
   line-height: inherit;
   color: inherit;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .word-body > * {
@@ -1077,16 +1230,48 @@ textarea:disabled {
   background: var(--panel-soft);
 }
 
+.right-rail > .inspector-section:not(.selected-card):not(.notes-section) {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 220px;
+  overflow: auto;
+}
+
 .selected-card {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 184px;
+  overflow: hidden;
+}
+
+.selected-card.expanded {
+  flex-basis: clamp(220px, 34vh, 340px);
+  min-height: 220px;
+  max-height: clamp(220px, 34vh, 340px);
+}
+
+.selected-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  color: #33423b;
+  font-size: 12px;
+  font-weight: 780;
   flex-shrink: 0;
 }
 
 .meta-grid {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr);
-  gap: 8px 10px;
-  margin-bottom: 10px;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 6px 8px;
+  margin-bottom: 8px;
   font-size: 12px;
+  flex-shrink: 0;
 }
 
 .meta-grid span {
@@ -1101,16 +1286,28 @@ textarea:disabled {
 }
 
 .excerpt-box {
-  max-height: 112px;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 72px;
   overflow: auto;
-  padding: 10px;
+  padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 7px;
   background: #ffffff;
   color: #33423b;
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.55;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.selected-card.expanded .excerpt-box {
+  flex: 1 1 auto;
+  max-height: none;
+}
+
+.editor-section {
+  gap: 0;
 }
 
 .field-label {
@@ -1150,6 +1347,40 @@ textarea:disabled {
   line-height: 1.6;
 }
 
+.mode-row {
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  color: #33423b;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.revision-box {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin: 0 0 10px;
+  padding: 10px;
+  border: 1px solid #d7e4dc;
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.revision-input {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  outline: 0;
+  background: #ffffff;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .autosave-hint {
   margin-top: 10px;
   padding: 8px 10px;
@@ -1162,6 +1393,7 @@ textarea:disabled {
 }
 
 .instruction-input:focus,
+.revision-input:focus,
 select:focus,
 .source-pane:focus {
   border-color: #87bea0;
@@ -1202,13 +1434,33 @@ select {
 
 .notes-section {
   display: flex;
-  flex: 1;
+  flex: 0 1 172px;
   flex-direction: column;
-  min-height: 0;
+  min-height: 142px;
+  max-height: 190px;
+  overflow: hidden;
+}
+
+.notes-section.expanded {
+  flex: 1 1 clamp(300px, 48vh, 520px);
+  min-height: 240px;
+  max-height: clamp(300px, 48vh, 520px);
+}
+
+.notes-section .section-title {
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.section-title .inline-toggle-button {
+  margin-left: 8px;
 }
 
 .notes-list {
+  flex: 1;
+  min-height: 0;
   margin-top: 10px;
+  overflow: auto;
 }
 
 .note-item {
@@ -1216,6 +1468,7 @@ select {
   grid-template-columns: minmax(0, 1fr) 30px;
   align-items: stretch;
   gap: 5px;
+  min-height: 0;
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
   border-radius: 8px;
@@ -1239,8 +1492,8 @@ select {
   min-width: 0;
   flex-direction: column;
   align-items: flex-start;
-  gap: 3px;
-  padding: 9px 8px;
+  gap: 2px;
+  padding: 7px 8px;
   border-radius: 7px 0 0 7px;
   background: transparent;
   text-align: left;
@@ -1254,20 +1507,23 @@ select {
   color: var(--quiet);
   font-size: 11px;
   font-weight: 700;
+  line-height: 1.35;
 }
 
 .note-main strong {
   display: block;
   max-width: 100%;
   color: #1d2a24;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 720;
+  line-height: 1.35;
 }
 
 .note-main small {
   display: block;
   max-width: 100%;
-  font-size: 11px;
+  font-size: 10.5px;
+  line-height: 1.35;
 }
 
 .icon-button {
@@ -1381,6 +1637,17 @@ select {
   }
 
   .right-rail {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .right-rail > .inspector-section:not(.selected-card):not(.notes-section) {
+    flex: 0 1 auto;
+    min-height: 0;
+  }
+
+  .notes-section {
+    flex-basis: auto;
     max-height: none;
   }
 

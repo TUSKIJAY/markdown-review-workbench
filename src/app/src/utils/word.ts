@@ -7,7 +7,7 @@ import type {
   ParsedDocument,
   SourceFormat,
 } from '../types';
-import { createContentHash } from './markdown';
+import { createContentHashFromBytes } from './markdown';
 
 type MammothModule = {
   convertToHtml(input: { arrayBuffer: ArrayBuffer }, options?: Record<string, unknown>): Promise<{
@@ -180,6 +180,9 @@ export function parseWordHtml(html: string): { html: string; parsed: ParsedDocum
 }
 
 export async function convertWordToDocument(fileName: string, filePath: string, arrayBuffer: ArrayBuffer) {
+  // 先基于原始 .docx 字节计算指纹，再交给 mammoth 转换：指纹锚定原文件而非转换结果，
+  // mammoth 版本或 styleMap 变化不会改变指纹，从而不会让历史标注失配。
+  const contentHash = createContentHashFromBytes(arrayBuffer);
   const mammothModule = await import('mammoth');
   const mammoth = mammothModule.default as unknown as MammothModule;
   const result = await mammoth.convertToHtml(
@@ -201,7 +204,7 @@ export async function convertWordToDocument(fileName: string, filePath: string, 
     fileName,
     filePath,
     markdown: '',
-    contentHash: createContentHash(html),
+    contentHash,
     totalLines: parsed.totalLines,
     sourceFormat: 'docx',
     conversionMessages: messages,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import {
   AlertCircle,
   Check,
@@ -24,17 +24,33 @@ import type {
   MarkdownBlock,
   NotePriority,
   NoteStatus,
+  ReviewMode,
   ReviewNote,
+  RevisionType,
 } from './types';
-import { createContentHash, getBaseName, parseMarkdown, renderMarkdownHtml } from './utils/markdown';
+import {
+  createContentHash,
+  extractMarkdownImageSources,
+  getBaseName,
+  parseMarkdown,
+  renderMarkdownHtml,
+} from './utils/markdown';
 import { buildAgentNotesJson, buildReviewMarkdown, saveTextFile } from './utils/export';
-import { buildStorageKey, loadStoredNotes, storeNotes } from './utils/storage';
+import {
+  buildStorageKey,
+  loadStoredNotes,
+  loadSyncBaseline,
+  storeNotes,
+  storeSyncBaseline,
+} from './utils/storage';
 import {
   isTauriCancel,
   isTauriRuntime,
   openDocumentFileWithTauri,
   openMarkdownFolderWithTauri,
   readDocumentFileWithTauri,
+  readMarkdownImageWithTauri,
+  readReviewFilesWithTauri,
   type LoadedSourceDocument,
   writeReviewFilesWithTauri,
 } from './utils/tauri';
@@ -52,6 +68,12 @@ import {
   removeRecent,
   type RecentEntry,
 } from './utils/recent';
+
+// 自动保存与同步的防抖时长（毫秒），集中在此调整，避免魔法数字散落各处。
+const AUTOSAVE_DEBOUNCE_MS = 550;
+const FILE_SYNC_DEBOUNCE_MS = 850;
+const TOAST_DURATION_MS = 2600;
+const imagePathSuffixPattern = /[?#].*$/;
 
 const actionOptions: Array<{ value: ExpectedAction; label: string }> = [
   { value: 'rewrite', label: '重写' },
@@ -75,6 +97,15 @@ const statusOptions: Array<{ value: NoteStatus; label: string }> = [
   { value: 'done', label: '已完成' },
 ];
 
+const revisionTypeOptions: Array<{ value: RevisionType; label: string }> = [
+  { value: 'replace', label: '替换' },
+  { value: 'delete', label: '删除' },
+  { value: 'insert', label: '插入' },
+];
+
+type SelectionRange = NonNullable<ReviewNote['selectionRange']>;
+type InspectorExpansion = 'none' | 'excerpt' | 'notes';
+
 const blockTypeLabels: Record<MarkdownBlock['type'], string> = {
   heading: '标题',
   paragraph: '段落',
@@ -94,6 +125,183 @@ function formatLineRange(block: Pick<MarkdownBlock, 'startLine' | 'endLine'>, fo
 
 function makeNoteId() {
   return `note-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function isExternalAssetSrc(src: string) {
+  return /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(src);
+}
+
+function stripImagePathSuffix(src: string) {
+  return src.replace(imagePathSuffixPattern, '');
+}
+
+function decodeImagePath(src: string) {
+  try {
+    return decodeURIComponent(stripImagePathSuffix(src));
+  } catch {
+    return stripImagePathSuffix(src);
+  }
+}
+
+function normalizePathParts(parts: string[]) {
+  const normalized: string[] = [];
+  for (const part of parts) {
+    if (!part || part === '.') continue;
+    if (part === '..') {
+      if (!normalized.length) return null;
+      normalized.pop();
+      continue;
+    }
+    normalized.push(part);
+  }
+  return normalized;
+}
+
+function resolveBrowserAssetParts(documentPath: string, rootName: string, src: string) {
+  const documentParts = documentPath.split('/').filter(Boolean);
+  const rootOffset = documentParts[0] === rootName ? 1 : 0;
+  const documentDirectory = documentParts.slice(rootOffset, -1);
+  const imageParts = decodeImagePath(src).split(/[\\/]+/);
+  return normalizePathParts([...documentDirectory, ...imageParts]);
+}
+
+function getNoteMode(note: ReviewNote | null | undefined): ReviewMode {
+  return note?.mode ?? 'comment';
+}
+
+function getNoteAnchorText(note: ReviewNote) {
+  return note.selectionRange?.text || note.selectedText || note.originalMarkdown;
+}
+
+function noteMatchesSelection(note: ReviewNote, blockId: string, selectionRange: SelectionRange | null) {
+  if (note.blockId !== blockId) return false;
+  if (!selectionRange) return !note.selectionRange;
+  return (
+    note.selectionRange?.startOffset === selectionRange.startOffset &&
+    note.selectionRange?.endOffset === selectionRange.endOffset &&
+    getNoteAnchorText(note) === selectionRange.text
+  );
+}
+
+function findDraftNote(notes: ReviewNote[], blockId: string, selectionRange: SelectionRange | null, noteId: string | null) {
+  if (noteId) {
+    const byId = notes.find((note) => note.id === noteId);
+    if (byId) return byId;
+  }
+  return notes.find((note) => noteMatchesSelection(note, blockId, selectionRange)) ?? null;
+}
+
+function createSelectionRange(selection: Selection, bodyElement: HTMLElement, selectedText: string): SelectionRange | null {
+  if (selection.rangeCount === 0) return null;
+  const range = selection.getRangeAt(0);
+  if (!bodyElement.contains(range.commonAncestorContainer)) return null;
+
+  const preSelectionRange = range.cloneRange();
+  preSelectionRange.selectNodeContents(bodyElement);
+  preSelectionRange.setEnd(range.startContainer, range.startOffset);
+  const startOffset = preSelectionRange.toString().length;
+  const endOffset = startOffset + selectedText.length;
+  if (endOffset <= startOffset) return null;
+  return { startOffset, endOffset, text: selectedText };
+}
+
+function buildBlockHtmlWithNotes(html: string, blockNotes: ReviewNote[], activeNoteId: string | null) {
+  if (!blockNotes.length || typeof document === 'undefined') return html;
+
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+  const textNodes: Array<{ node: Text; start: number; end: number }> = [];
+  let offset = 0;
+  let node = walker.nextNode();
+  while (node) {
+    const textNode = node as Text;
+    const length = textNode.data.length;
+    textNodes.push({ node: textNode, start: offset, end: offset + length });
+    offset += length;
+    node = walker.nextNode();
+  }
+
+  const ranges = blockNotes
+    .map((note) => {
+      const selectionRange = note.selectionRange;
+      if (selectionRange) {
+        return {
+          note,
+          start: selectionRange.startOffset,
+          end: selectionRange.endOffset,
+          text: selectionRange.text,
+        };
+      }
+      const selectedText = note.selectedText?.trim();
+      if (!selectedText) return null;
+      const fullText = template.content.textContent ?? '';
+      const start = fullText.indexOf(selectedText);
+      if (start < 0) return null;
+      return { note, start, end: start + selectedText.length, text: selectedText };
+    })
+    .filter((range): range is { note: ReviewNote; start: number; end: number; text: string } => Boolean(range))
+    .sort((a, b) => a.start - b.start);
+
+  const nonOverlappingRanges: typeof ranges = [];
+  let lastEnd = -1;
+  for (const range of ranges) {
+    if (range.end <= range.start || range.start < lastEnd) continue;
+    nonOverlappingRanges.push(range);
+    lastEnd = range.end;
+  }
+
+  for (const textNode of textNodes) {
+    const overlapping = nonOverlappingRanges
+      .filter((range) => range.start < textNode.end && range.end > textNode.start)
+      .sort((a, b) => a.start - b.start);
+    if (!overlapping.length) continue;
+
+    const fragment = document.createDocumentFragment();
+    let cursor = 0;
+
+    for (const range of overlapping) {
+      const localStart = Math.max(0, range.start - textNode.start);
+      const localEnd = Math.min(textNode.node.data.length, range.end - textNode.start);
+      if (localStart > cursor) {
+        fragment.append(textNode.node.data.slice(cursor, localStart));
+      }
+      const middle = textNode.node.data.slice(localStart, localEnd);
+      if (!middle.trim()) {
+        fragment.append(middle);
+        cursor = localEnd;
+        continue;
+      }
+      const mark = document.createElement('mark');
+      const mode = getNoteMode(range.note);
+      mark.className = [
+        'annotation-mark',
+        mode === 'revision' ? `revision-mark revision-${range.note.revisionType ?? 'replace'}` : 'comment-mark',
+        range.note.id === activeNoteId ? 'active' : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
+      mark.dataset.noteId = range.note.id;
+      mark.textContent = middle;
+      mark.title = mode === 'revision' ? '修订片段' : '批注片段';
+
+      if (mode === 'revision' && range.note.revisionType !== 'delete' && range.note.replacementText) {
+        const insert = document.createElement('span');
+        insert.className = 'revision-insert-text';
+        insert.textContent = range.note.replacementText;
+        mark.appendChild(insert);
+      }
+
+      fragment.append(mark);
+      cursor = localEnd;
+    }
+    if (cursor < textNode.node.data.length) {
+      fragment.append(textNode.node.data.slice(cursor));
+    }
+    textNode.node.replaceWith(fragment);
+  }
+
+  return template.innerHTML;
 }
 
 async function collectDocumentFiles(
@@ -129,19 +337,28 @@ function App() {
   const autoSaveTimerRef = useRef<number | null>(null);
   const fileSyncTimerRef = useRef<number | null>(null);
   const skipNextFileSyncRef = useRef(false);
+  const browserFolderRootRef = useRef<FileSystemDirectoryHandle | null>(null);
+  const browserImageUrlsRef = useRef<string[]>([]);
 
   const [activeDoc, setActiveDoc] = useState<LoadedDocument | null>(null);
   const [markdown, setMarkdown] = useState('');
   const [notes, setNotes] = useState<ReviewNote[]>([]);
   const [folderFiles, setFolderFiles] = useState<FolderMarkdownFile[]>([]);
+  const [imageSrcMap, setImageSrcMap] = useState<Record<string, string>>({});
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
+  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [selectedText, setSelectedText] = useState('');
+  const [selectedRange, setSelectedRange] = useState<SelectionRange | null>(null);
   const [viewMode, setViewMode] = useState<'preview' | 'source'>('preview');
   const [query, setQuery] = useState('');
   const [toast, setToast] = useState('');
+  const [inspectorExpansion, setInspectorExpansion] = useState<InspectorExpansion>('none');
 
   const [draftBlockId, setDraftBlockId] = useState<string | null>(null);
   const [draftInstruction, setDraftInstruction] = useState('');
+  const [draftMode, setDraftMode] = useState<ReviewMode>('comment');
+  const [draftRevisionType, setDraftRevisionType] = useState<RevisionType>('replace');
+  const [draftReplacementText, setDraftReplacementText] = useState('');
   const [draftAction, setDraftAction] = useState<ExpectedAction>('rewrite');
   const [draftPriority, setDraftPriority] = useState<NotePriority>('medium');
   const [draftStatus, setDraftStatus] = useState<NoteStatus>('todo');
@@ -160,16 +377,117 @@ function App() {
   }, [activeDoc, markdown]);
   const selectedBlock = parsed.blocks.find((block) => block.id === selectedBlockId) ?? null;
   const isWordDoc = activeDoc?.sourceFormat === 'docx';
-  const noteMap = useMemo(() => new Map(notes.map((note) => [note.blockId, note])), [notes]);
+  const notesByBlock = useMemo(() => {
+    const map = new Map<string, ReviewNote[]>();
+    notes.forEach((note) => {
+      const blockNotes = map.get(note.blockId) ?? [];
+      blockNotes.push(note);
+      map.set(note.blockId, blockNotes);
+    });
+    return map;
+  }, [notes]);
+  const selectedNote = selectedNoteId ? notes.find((note) => note.id === selectedNoteId) ?? null : null;
   const searchTerm = query.trim().toLowerCase();
+  const selectedExcerpt = selectedText || selectedNote?.selectedText || selectedBlock?.plain || selectedBlock?.raw || '';
+  const visibleInspectorNotes = inspectorExpansion === 'notes' ? notes : notes.slice(0, 2);
+  const resolveMarkdownImageSrc = (src: string) => {
+    if (isExternalAssetSrc(src)) return src;
+    if (imageSrcMap[src]) return imageSrcMap[src];
+    if (!isTauriRuntime() && !browserFolderRootRef.current) {
+      return {
+        message: '浏览器单文件模式无法读取同目录图片，请用“打开文件夹”打开包含图片的目录。',
+      };
+    }
+    return {
+      message: '未找到图片文件，请确认图片在源 Markdown 同目录或子目录中。',
+    };
+  };
+
+  function revokeBrowserImageUrls() {
+    browserImageUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    browserImageUrlsRef.current = [];
+  }
 
   useEffect(() => {
     return () => {
       if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
       if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
       if (fileSyncTimerRef.current) window.clearTimeout(fileSyncTimerRef.current);
+      revokeBrowserImageUrls();
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function resolveMarkdownImages() {
+      revokeBrowserImageUrls();
+
+      if (!activeDoc || activeDoc.sourceFormat !== 'markdown') {
+        setImageSrcMap({});
+        return;
+      }
+
+      const imageSources = Array.from(new Set(extractMarkdownImageSources(activeDoc.markdown))).filter(
+        (src) => !isExternalAssetSrc(src),
+      );
+      if (!imageSources.length) {
+        setImageSrcMap({});
+        return;
+      }
+
+      const nextMap: Record<string, string> = {};
+
+      await Promise.all(
+        imageSources.map(async (src) => {
+          const imagePath = decodeImagePath(src);
+          if (!imagePath) return;
+
+          if (isTauriRuntime() && activeDoc.filePath) {
+            try {
+              const asset = await readMarkdownImageWithTauri(activeDoc.filePath, imagePath);
+              nextMap[src] = asset.dataUrl;
+            } catch {
+              // Keep the original relative src when the local image cannot be read.
+            }
+            return;
+          }
+
+          const rootHandle = browserFolderRootRef.current;
+          if (!rootHandle || !activeDoc.filePath) return;
+
+          const parts = resolveBrowserAssetParts(activeDoc.filePath, rootHandle.name, src);
+          if (!parts?.length) return;
+
+          try {
+            let directory = rootHandle;
+            for (const part of parts.slice(0, -1)) {
+              directory = await directory.getDirectoryHandle(part);
+            }
+            const fileHandle = await directory.getFileHandle(parts[parts.length - 1]);
+            const file = await fileHandle.getFile();
+            const imageName = parts[parts.length - 1].toLowerCase();
+            if (file.type && !file.type.startsWith('image/')) return;
+            if (!file.type && !/\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(imageName)) return;
+            if (cancelled) return;
+            const objectUrl = URL.createObjectURL(file);
+            browserImageUrlsRef.current.push(objectUrl);
+            nextMap[src] = objectUrl;
+          } catch {
+            // Browser single-file mode has no permission to sibling images; leave src unchanged.
+          }
+        }),
+      );
+
+      if (!cancelled) setImageSrcMap(nextMap);
+    }
+
+    void resolveMarkdownImages();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeDoc]);
 
   useEffect(() => {
     if (autoOpenAttemptedRef.current) return;
@@ -192,7 +510,7 @@ function App() {
 
   useEffect(() => {
     if (!activeDoc) return;
-    storeNotes(buildStorageKey(activeDoc.fileName, activeDoc.contentHash), notes);
+    storeNotes(buildStorageKey(activeDoc), activeDoc.contentHash, notes);
   }, [activeDoc, notes]);
 
   useEffect(() => {
@@ -212,7 +530,7 @@ function App() {
     setFileSyncState('等待同步...');
     fileSyncTimerRef.current = window.setTimeout(() => {
       void syncReviewFilesToDisk('auto');
-    }, 850);
+    }, FILE_SYNC_DEBOUNCE_MS);
 
     return () => {
       if (fileSyncTimerRef.current) {
@@ -226,6 +544,9 @@ function App() {
     if (!selectedBlock) {
       setDraftBlockId(null);
       setDraftInstruction('');
+      setDraftMode('comment');
+      setDraftRevisionType('replace');
+      setDraftReplacementText('');
       setDraftAction('rewrite');
       setDraftPriority('medium');
       setDraftStatus('todo');
@@ -233,22 +554,28 @@ function App() {
       return;
     }
 
-    const existing = noteMap.get(selectedBlock.id);
+    const existing = findDraftNote(notes, selectedBlock.id, selectedRange, selectedNoteId);
     setDraftBlockId(selectedBlock.id);
     if (existing) {
       setDraftInstruction(existing.instruction);
+      setDraftMode(isWordDoc ? 'comment' : getNoteMode(existing));
+      setDraftRevisionType(existing.revisionType ?? 'replace');
+      setDraftReplacementText(existing.replacementText ?? '');
       setDraftAction(existing.expectedAction);
       setDraftPriority(existing.priority);
       setDraftStatus(existing.status);
       setAutoSaveState('已自动保存');
     } else {
       setDraftInstruction('');
+      setDraftMode('comment');
+      setDraftRevisionType('replace');
+      setDraftReplacementText('');
       setDraftAction('rewrite');
       setDraftPriority('medium');
       setDraftStatus('todo');
       setAutoSaveState('等待输入');
     }
-  }, [noteMap, selectedBlock]);
+  }, [isWordDoc, notes, selectedBlock, selectedNoteId, selectedRange]);
 
   useEffect(() => {
     if (autoSaveTimerRef.current) {
@@ -261,21 +588,36 @@ function App() {
     }
 
     const instruction = draftInstruction.trim();
-    const existing = noteMap.get(selectedBlock.id);
+    const existing = findDraftNote(notes, selectedBlock.id, selectedRange, selectedNoteId);
+    const mode: ReviewMode = isWordDoc ? 'comment' : draftMode;
+    const replacementText = draftReplacementText.trim();
+    const hasRevisionContent = mode === 'revision' && (draftRevisionType === 'delete' || replacementText.length > 0);
 
-    if (!instruction) {
+    if (!instruction && !hasRevisionContent) {
       setAutoSaveState(existing ? '内容为空，未覆盖原标注' : '等待输入');
       return;
     }
 
-    const selectedSnippet = selectedText || existing?.selectedText;
+    const effectiveInstruction =
+      instruction ||
+      (draftRevisionType === 'delete'
+        ? '删除所选片段'
+        : draftRevisionType === 'insert'
+          ? '在所选片段附近插入补充内容'
+          : '替换所选片段');
+    const selectedSnippet = selectedRange?.text || selectedText || existing?.selectedText;
     const hasChanged =
       !existing ||
-      existing.instruction !== instruction ||
+      getNoteMode(existing) !== mode ||
+      existing.instruction !== effectiveInstruction ||
       existing.expectedAction !== draftAction ||
       existing.priority !== draftPriority ||
       existing.status !== draftStatus ||
-      existing.selectedText !== selectedSnippet;
+      existing.selectedText !== selectedSnippet ||
+      existing.selectionRange?.startOffset !== selectedRange?.startOffset ||
+      existing.selectionRange?.endOffset !== selectedRange?.endOffset ||
+      existing.revisionType !== (mode === 'revision' ? draftRevisionType : undefined) ||
+      (existing.replacementText ?? '') !== (mode === 'revision' ? replacementText : '');
 
     if (!hasChanged) {
       setAutoSaveState('已自动保存');
@@ -285,12 +627,15 @@ function App() {
     setAutoSaveState('正在自动保存...');
     autoSaveTimerRef.current = window.setTimeout(() => {
       const now = new Date().toISOString();
+      let savedNoteId: string | null = null;
 
       setNotes((current) => {
-        const currentExisting = current.find((note) => note.blockId === selectedBlock.id);
-        const currentSelectedSnippet = selectedText || currentExisting?.selectedText;
+        const currentExisting = findDraftNote(current, selectedBlock.id, selectedRange, selectedNoteId);
+        const currentSelectedSnippet = selectedRange?.text || selectedText || currentExisting?.selectedText;
+        const nextNoteId = currentExisting?.id ?? makeNoteId();
+        savedNoteId = nextNoteId;
         const nextNote: ReviewNote = {
-          id: currentExisting?.id ?? makeNoteId(),
+          id: nextNoteId,
           blockId: selectedBlock.id,
           blockType: selectedBlock.type,
           startLine: selectedBlock.startLine,
@@ -298,7 +643,11 @@ function App() {
           headingPath: selectedBlock.headingPath,
           originalMarkdown: selectedBlock.raw,
           selectedText: currentSelectedSnippet,
-          instruction,
+          selectionRange: selectedRange ?? currentExisting?.selectionRange,
+          mode,
+          revisionType: mode === 'revision' ? draftRevisionType : undefined,
+          replacementText: mode === 'revision' ? replacementText : undefined,
+          instruction: effectiveInstruction,
           expectedAction: draftAction,
           priority: draftPriority,
           status: draftStatus,
@@ -309,8 +658,9 @@ function App() {
         if (!currentExisting) return [nextNote, ...current];
         return current.map((note) => (note.id === currentExisting.id ? nextNote : note));
       });
+      if (savedNoteId) setSelectedNoteId(savedNoteId);
       setAutoSaveState('已自动保存');
-    }, 550);
+    }, AUTOSAVE_DEBOUNCE_MS);
 
     return () => {
       if (autoSaveTimerRef.current) {
@@ -322,32 +672,43 @@ function App() {
     draftAction,
     draftBlockId,
     draftInstruction,
+    draftMode,
     draftPriority,
+    draftReplacementText,
+    draftRevisionType,
     draftStatus,
-    noteMap,
+    isWordDoc,
+    notes,
     selectedBlock,
+    selectedNoteId,
+    selectedRange,
     selectedText,
   ]);
 
   function showToast(message: string) {
     setToast(message);
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = window.setTimeout(() => setToast(''), 2600);
+    toastTimerRef.current = window.setTimeout(() => setToast(''), TOAST_DURATION_MS);
   }
 
   function loadDocument(document: LoadedDocument, message = `已打开 ${document.fileName}`) {
     skipNextFileSyncRef.current = true;
+    const { notes: storedNotes, storedHash } = loadStoredNotes(buildStorageKey(document));
     setActiveDoc(document);
     setMarkdown(document.markdown);
-    setNotes(loadStoredNotes(buildStorageKey(document.fileName, document.contentHash)));
+    setNotes(storedNotes);
     setSelectedBlockId(null);
+    setSelectedNoteId(null);
     setSelectedText('');
+    setSelectedRange(null);
     setViewMode('preview');
     setFileSyncState(isTauriRuntime() ? '桌面模式：等待标注' : '浏览器模式：手动导出');
     if (isTauriRuntime() && document.filePath) {
       setRecentEntries(recordRecent(document));
     }
-    showToast(message);
+    // 标注键不再含内容指纹，原文变更后标注不会丢失；但行号/块号定位可能已偏移，显式提示用户核对。
+    const drifted = storedNotes.length > 0 && storedHash != null && storedHash !== document.contentHash;
+    showToast(drifted ? `${message}（注意：原文自上次标注后已变更，定位可能偏移，请核对）` : message);
   }
 
   async function reopenRecent(entry: RecentEntry) {
@@ -431,11 +792,40 @@ function App() {
   async function syncReviewFilesToDisk(mode: 'auto' | 'manual') {
     if (!activeDoc || !isTauriRuntime()) return null;
 
+    const aiNotesJson = JSON.stringify(buildAgentNotesJson(activeDoc, notes), null, 2);
+    const reviewMarkdown = buildReviewMarkdown(activeDoc, notes);
+    const nextAiHash = createContentHash(aiNotesJson);
+    const nextReviewHash = createContentHash(reviewMarkdown);
+
+    // 自动同步前先检查原文目录的 sidecar 是否被外部（人或 Agent）改动过，避免静默覆盖。
+    // 判定“外部改动”：磁盘内容既不等于我们即将写入的新内容，也不等于上次写出的基线（或无基线）。
+    // 手动“保存”视为用户明确的覆盖意图，跳过此保护直接写入。
+    if (mode === 'auto') {
+      try {
+        const existing = await readReviewFilesWithTauri(activeDoc.filePath);
+        const baseline = loadSyncBaseline(activeDoc.filePath);
+        const aiChangedOutside =
+          existing.aiNotes != null &&
+          createContentHash(existing.aiNotes) !== nextAiHash &&
+          (baseline == null || createContentHash(existing.aiNotes) !== baseline.aiHash);
+        const reviewChangedOutside =
+          existing.review != null &&
+          createContentHash(existing.review) !== nextReviewHash &&
+          (baseline == null || createContentHash(existing.review) !== baseline.reviewHash);
+        if (aiChangedOutside || reviewChangedOutside) {
+          setFileSyncState('检测到外部修改，自动同步已暂停');
+          showToast('审阅文件被外部修改，自动同步已暂停；点"保存"可手动覆盖');
+          return null;
+        }
+      } catch {
+        // 读取现存 sidecar 失败（通常是文件尚不存在），不阻塞首次写入。
+      }
+    }
+
     try {
       setFileSyncState(mode === 'manual' ? '正在手动同步...' : '正在同步任务文件...');
-      const aiNotesJson = JSON.stringify(buildAgentNotesJson(activeDoc, notes), null, 2);
-      const reviewMarkdown = buildReviewMarkdown(activeDoc, notes);
       const result = await writeReviewFilesWithTauri(activeDoc.filePath, aiNotesJson, reviewMarkdown);
+      storeSyncBaseline(activeDoc.filePath, nextAiHash, nextReviewHash);
       setFileSyncState('已同步任务文件');
       if (mode === 'manual') showToast('任务文件已同步到原文目录');
       return result;
@@ -449,6 +839,7 @@ function App() {
   async function openMarkdownFile() {
     if (isTauriRuntime()) {
       try {
+        browserFolderRootRef.current = null;
         const document = await openDocumentFileWithTauri();
         await loadSourceDocument(document);
       } catch (error) {
@@ -474,6 +865,7 @@ function App() {
           ],
         });
         const file = await handle.getFile();
+        browserFolderRootRef.current = null;
         await loadFile(file, file.name);
         return;
       } catch (error) {
@@ -490,6 +882,7 @@ function App() {
   async function openFolder() {
     if (isTauriRuntime()) {
       try {
+        browserFolderRootRef.current = null;
         const folder = await openMarkdownFolderWithTauri();
         setFolderFiles(folder.files);
         showToast(`已读取 ${folder.files.length} 个文档`);
@@ -511,6 +904,7 @@ function App() {
 
     try {
       const directory = await window.showDirectoryPicker();
+      browserFolderRootRef.current = directory;
       const files = await collectDocumentFiles(directory, directory.name);
       setFolderFiles(files);
       showToast(`已读取 ${files.length} 个文档`);
@@ -528,6 +922,7 @@ function App() {
   function handleFileInput(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
+    browserFolderRootRef.current = null;
     loadFile(file, file.name).catch((error) => {
       console.error('loadFile failed', error);
       showToast('文档读取失败');
@@ -537,10 +932,26 @@ function App() {
 
   function focusBlock(blockId: string) {
     setSelectedBlockId(blockId);
+    setSelectedNoteId(null);
     setSelectedText('');
+    setSelectedRange(null);
     window.requestAnimationFrame(() => {
       document.getElementById(blockId)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     });
+  }
+
+  function focusNote(note: ReviewNote) {
+    setSelectedBlockId(note.blockId);
+    setSelectedNoteId(note.id);
+    setSelectedText(note.selectedText ?? '');
+    setSelectedRange(note.selectionRange ?? null);
+    window.requestAnimationFrame(() => {
+      document.getElementById(note.blockId)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+  }
+
+  function toggleInspectorExpansion(target: Exclude<InspectorExpansion, 'none'>) {
+    setInspectorExpansion((current) => (current === target ? 'none' : target));
   }
 
   function handlePreviewMouseUp() {
@@ -554,12 +965,42 @@ function App() {
       selection.anchorNode instanceof Element ? selection.anchorNode : selection.anchorNode.parentElement;
     const blockElement = anchor?.closest<HTMLElement>('[data-block-id]');
     const blockId = blockElement?.dataset.blockId;
-    if (blockId) setSelectedBlockId(blockId);
+    const bodyElement = anchor?.closest<HTMLElement>('.markdown-body, .word-body');
+    const range = selection && bodyElement ? createSelectionRange(selection, bodyElement, text) : null;
+    if (blockId) {
+      const matchingNote = notes.find((note) => noteMatchesSelection(note, blockId, range));
+      setSelectedBlockId(blockId);
+      setSelectedNoteId(matchingNote?.id ?? null);
+    }
     setSelectedText(text);
+    setSelectedRange(range);
+  }
+
+  function handleBlockClick(blockId: string, event: ReactMouseEvent<HTMLElement>) {
+    const target = event.target as HTMLElement;
+    const mark = target.closest<HTMLElement>('[data-note-id]');
+    const noteId = mark?.dataset.noteId;
+    if (noteId) {
+      const note = notes.find((item) => item.id === noteId);
+      if (note) focusNote(note);
+      return;
+    }
+
+    const selectionText = window.getSelection()?.toString().trim();
+    if (selectionText) return;
+    setSelectedBlockId(blockId);
+    setSelectedNoteId(null);
+    setSelectedText('');
+    setSelectedRange(null);
   }
 
   function removeNote(noteId: string) {
     setNotes((current) => current.filter((note) => note.id !== noteId));
+    if (selectedNoteId === noteId) {
+      setSelectedNoteId(null);
+      setSelectedText('');
+      setSelectedRange(null);
+    }
     showToast('标注已移除');
   }
 
@@ -871,7 +1312,8 @@ function App() {
               {isWordDoc ? (
                 <div className="word-page">
                   {visibleBlocks.map((block) => {
-                    const hasNote = noteMap.has(block.id);
+                    const blockNotes = notesByBlock.get(block.id) ?? [];
+                    const hasNote = blockNotes.length > 0;
                     const isSelected = block.id === selectedBlockId;
                     const isMatch =
                       searchTerm &&
@@ -886,19 +1328,23 @@ function App() {
                         className={`word-block ${isSelected ? 'selected' : ''} ${hasNote ? 'annotated' : ''} ${
                           isMatch ? 'matched' : ''
                         } block-${block.type}`}
-                        onClick={() => {
-                          setSelectedBlockId(block.id);
-                          setSelectedText('');
-                        }}
+                        onClick={(event) => handleBlockClick(block.id, event)}
                       >
                         <div className="word-block-chrome">
                           <span>{blockTypeLabels[block.type]}</span>
                           <span>#{block.startLine}</span>
-                          {hasNote && <Check size={14} />}
+                          {hasNote && (
+                            <>
+                              <Check size={14} />
+                              <span>{blockNotes.length}</span>
+                            </>
+                          )}
                         </div>
                         <div
                           className="word-body"
-                          dangerouslySetInnerHTML={{ __html: block.html ?? '' }}
+                          dangerouslySetInnerHTML={{
+                            __html: buildBlockHtmlWithNotes(block.html ?? '', blockNotes, selectedNoteId),
+                          }}
                         />
                       </article>
                     );
@@ -906,7 +1352,8 @@ function App() {
                 </div>
               ) : (
                 visibleBlocks.map((block) => {
-                  const hasNote = noteMap.has(block.id);
+                  const blockNotes = notesByBlock.get(block.id) ?? [];
+                  const hasNote = blockNotes.length > 0;
                   const isSelected = block.id === selectedBlockId;
                   const isMatch =
                     searchTerm &&
@@ -921,19 +1368,27 @@ function App() {
                       className={`review-block ${isSelected ? 'selected' : ''} ${hasNote ? 'annotated' : ''} ${
                         isMatch ? 'matched' : ''
                       } block-${block.type}`}
-                      onClick={() => {
-                        setSelectedBlockId(block.id);
-                        setSelectedText('');
-                      }}
+                      onClick={(event) => handleBlockClick(block.id, event)}
                     >
                       <div className="block-chrome">
                         <span>{blockTypeLabels[block.type]}</span>
                         <span>{formatLineRange(block)}</span>
-                        {hasNote && <Check size={14} />}
+                        {hasNote && (
+                          <>
+                            <Check size={14} />
+                            <span>{blockNotes.length}</span>
+                          </>
+                        )}
                       </div>
                       <div
                         className="markdown-body"
-                        dangerouslySetInnerHTML={{ __html: renderMarkdownHtml(block.raw) }}
+                        dangerouslySetInnerHTML={{
+                          __html: buildBlockHtmlWithNotes(
+                            renderMarkdownHtml(block.raw, resolveMarkdownImageSrc),
+                            blockNotes,
+                            selectedNoteId,
+                          ),
+                        }}
                       />
                     </article>
                   );
@@ -962,26 +1417,108 @@ function App() {
           <PanelRightOpen size={18} />
         </div>
 
-        <section className="inspector-section selected-card">
+        <section className={`inspector-section selected-card ${inspectorExpansion === 'excerpt' ? 'expanded' : ''}`}>
           {selectedBlock ? (
             <>
+              <div className="selected-card-header">
+                <span>选中内容</span>
+                <button
+                  className="inline-toggle-button"
+                  type="button"
+                  aria-controls="selected-excerpt"
+                  aria-expanded={inspectorExpansion === 'excerpt'}
+                  onClick={() => toggleInspectorExpansion('excerpt')}
+                >
+                  {inspectorExpansion === 'excerpt' ? '收起原文' : '展开原文'}
+                </button>
+              </div>
               <div className="meta-grid">
                 <span>类型</span>
                 <strong>{blockTypeLabels[selectedBlock.type]}</strong>
                 <span>章节</span>
                 <strong>{selectedBlock.headingPath.length ? selectedBlock.headingPath.join(' / ') : '未归入标题'}</strong>
+                <span>粒度</span>
+                <strong>
+                  {selectedRange
+                    ? `片段 ${selectedRange.startOffset}-${selectedRange.endOffset}`
+                    : selectedNote?.selectionRange
+                      ? `片段 ${selectedNote.selectionRange.startOffset}-${selectedNote.selectionRange.endOffset}`
+                      : '整块'}
+                </strong>
+                <span>模式</span>
+                <strong>{draftMode === 'revision' ? '修订' : '批注'}</strong>
               </div>
-              <div className="excerpt-box">{selectedText || selectedBlock.plain || selectedBlock.raw}</div>
+              <div className="excerpt-box" id="selected-excerpt">
+                {selectedExcerpt}
+              </div>
             </>
           ) : (
             <div className="empty-line">选择一个段落后开始标注</div>
           )}
         </section>
 
-        <section className="inspector-section">
+        <section className="inspector-section editor-section">
+          <div className="mode-row">
+            <span>记录类型</span>
+            <div className="segmented compact" aria-label="记录类型">
+              <button
+                className={draftMode === 'comment' ? 'active' : ''}
+                type="button"
+                disabled={!selectedBlock}
+                onClick={() => setDraftMode('comment')}
+              >
+                批注
+              </button>
+              <button
+                className={draftMode === 'revision' ? 'active' : ''}
+                type="button"
+                disabled={!selectedBlock || isWordDoc}
+                title={isWordDoc ? 'Word 文档暂只支持批注' : '以 sidecar 记录 Markdown 修订，不覆盖原文'}
+                onClick={() => setDraftMode('revision')}
+              >
+                修订
+              </button>
+            </div>
+          </div>
+
+          {draftMode === 'revision' && !isWordDoc && (
+            <div className="revision-box">
+              <label className="field-label">
+                修订动作
+                <select
+                  value={draftRevisionType}
+                  disabled={!selectedBlock}
+                  onChange={(event) => setDraftRevisionType(event.target.value as RevisionType)}
+                >
+                  {revisionTypeOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {draftRevisionType !== 'delete' && (
+                <label className="field-label">
+                  {draftRevisionType === 'insert' ? '插入内容' : '替换为'}
+                  <textarea
+                    className="revision-input"
+                    value={draftReplacementText}
+                    disabled={!selectedBlock}
+                    onChange={(event) => setDraftReplacementText(event.target.value)}
+                    placeholder={
+                      draftRevisionType === 'insert'
+                        ? '输入需要补充插入的 Markdown 文本。'
+                        : '输入替换后的 Markdown 文本。'
+                    }
+                  />
+                </label>
+              )}
+            </div>
+          )}
+
           <label className="field-label" htmlFor="instruction">
             <span className="label-row">
-              修改建议
+              {draftMode === 'revision' ? '修订说明' : '修改建议'}
               <small>{autoSaveState}</small>
             </span>
           </label>
@@ -991,7 +1528,11 @@ function App() {
             value={draftInstruction}
             disabled={!selectedBlock}
             onChange={(event) => setDraftInstruction(event.target.value)}
-            placeholder="例如：这里太泛，补充项目落地经验，语气改成投标响应风格。"
+            placeholder={
+              draftMode === 'revision'
+                ? '可选：说明本次修订原因。删除修订可直接保存。'
+                : '例如：这里太泛，补充项目落地经验，语气改成投标响应风格。'
+            }
           />
 
           <div className="field-row">
@@ -1039,26 +1580,49 @@ function App() {
               ))}
             </select>
           </label>
-          <div className="autosave-hint">{selectedBlock ? '输入非空修改建议后自动保存。清空输入框不会覆盖已有标注。' : '选择文档位置后开始填写。'}</div>
+          <div className="autosave-hint">
+            {selectedBlock
+              ? draftMode === 'revision'
+                ? '修订仅写入 sidecar，不会覆盖原 Markdown；替换/插入需填写修订内容，删除可直接保存。'
+                : '输入非空修改建议后自动保存。清空输入框不会覆盖已有标注。'
+              : '选择文档位置后开始填写。'}
+          </div>
         </section>
 
-        <section className="inspector-section notes-section">
+        <section className={`inspector-section notes-section ${inspectorExpansion === 'notes' ? 'expanded' : ''}`}>
           <div className="section-title">
             <AlertCircle size={15} />
             修改点
             <strong>{notes.length}</strong>
+            {notes.length > 2 && (
+              <button
+                className="inline-toggle-button"
+                type="button"
+                aria-controls="notes-list"
+                aria-expanded={inspectorExpansion === 'notes'}
+                onClick={() => toggleInspectorExpansion('notes')}
+              >
+                {inspectorExpansion === 'notes' ? '收起列表' : '展开全部'}
+              </button>
+            )}
           </div>
 
-          <div className="notes-list">
+          <div className="notes-list" id="notes-list">
             {notes.length ? (
-              notes.map((note, index) => (
+              visibleInspectorNotes.map((note, index) => (
                 <div className={`note-item priority-${note.priority}`} key={note.id}>
-                  <button className="note-main" type="button" onClick={() => focusBlock(note.blockId)}>
+                  <button className="note-main" type="button" onClick={() => focusNote(note)}>
                     <span>
-                      {String(index + 1).padStart(2, '0')} / {formatLineRange(note, isWordDoc ? 'block' : 'line')}
+                      {String(index + 1).padStart(2, '0')} / {getNoteMode(note) === 'revision' ? '修订' : '批注'} /{' '}
+                      {formatLineRange(note, isWordDoc ? 'block' : 'line')}
                     </span>
                     <strong>{note.instruction}</strong>
-                    <small>{note.headingPath.length ? note.headingPath.join(' / ') : '未归入标题'}</small>
+                    <small>
+                      {note.selectionRange
+                        ? `片段 ${note.selectionRange.startOffset}-${note.selectionRange.endOffset}`
+                        : '整块'}{' '}
+                      · {note.headingPath.length ? note.headingPath.join(' / ') : '未归入标题'}
+                    </small>
                   </button>
                   <button className="icon-button" type="button" onClick={() => removeNote(note.id)} title="删除标注">
                     <Trash2 size={15} />

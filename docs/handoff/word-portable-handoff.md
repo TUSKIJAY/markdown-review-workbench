@@ -217,7 +217,7 @@ Compress-Archive -LiteralPath $portable -DestinationPath (Join-Path $project "ou
 ## 推荐新 session 启动语
 
 ```text
-请读取 docs/word-portable-handoff.md，继续在现有源码基础上修复 Word 打开流程。
+请读取 docs/handoff/word-portable-handoff.md，继续在现有源码基础上修复 Word 打开流程。
 先用 npm run tauri:dev 验证 .docx 能选择和转换，不要急着打安装包。
 功能确认后产出绿色版 output/portable/Markdown文档审阅标注工作台-portable.zip。
 ```

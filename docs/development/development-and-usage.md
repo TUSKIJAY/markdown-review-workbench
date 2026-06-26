@@ -19,6 +19,12 @@ npm install
 npm run build:html
 ```
 
+如果本机安装了 `make`，也可在仓库根目录执行：
+
+```powershell
+make build-html
+```
+
 生成结果：
 
 ```text
@@ -32,6 +38,12 @@ npm run build:html
 ```powershell
 npm install
 npm run dev -- --port 5174
+```
+
+根目录快捷命令：
+
+```powershell
+make dev
 ```
 
 访问：
@@ -78,5 +90,5 @@ http://127.0.0.1:5174/
 - Playwright fallback：通过。
 - 验证地址：`http://127.0.0.1:5174/`
 - 单文件验证地址：`file:///.../output/markdown-review-workbench.html`
-- 验证样例：`docs/product-blueprint.md`
+- 验证样例：`docs/product/product-blueprint.md`
 - 截图位置：`output/playwright/`

@@ -17,10 +17,10 @@
 
 ## 标准更新流程
 
-执行人：当前会话的 AI agent。
+执行人：当前会话的 AI agent。从仓库根目录执行。
 
 ```powershell
-$project = "C:\Users\LENOVO\Desktop\工作\星际之门\林境售前workspace\项目\内部工具\Markdown文档审阅标注工作台"
+$project = (Get-Location).Path
 $src = Join-Path $project "src\app\src-tauri\target\release\markdown-review-workbench.exe"
 $portable = Join-Path $project "output\portable\Markdown文档审阅标注工作台"
 $dst = Join-Path $portable "Markdown文档审阅标注工作台.exe"

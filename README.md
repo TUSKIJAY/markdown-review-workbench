@@ -89,6 +89,15 @@ npm install
 npm run dev -- --port 5174
 ```
 
+如果本机安装了 `make`，也可以在仓库根目录使用：
+
+```bash
+make dev
+make build
+make build-html
+make tauri-build-no-bundle
+```
+
 浏览器访问：
 
 ```text
@@ -105,23 +114,22 @@ npm run build:html
 构建 Tauri 桌面版：
 
 ```bash
-npm run tauri:build
+npm run tauri:build -- --no-bundle
 ```
 
-日常验收如果只刷新绿色版，请遵守 [SOP-绿色版更新.md](SOP-绿色版更新.md)，不要误刷 MSI、NSIS、zip 或版本号。
+日常验收如果只刷新绿色版，请遵守 [绿色版更新 SOP](docs/packaging/绿色版更新SOP.md)，不要误刷 MSI、NSIS、zip 或版本号。
 
 ## 项目结构
 
 ```text
 .
 ├── src/app/                 # React / Vite / Tauri 应用
-├── docs/                    # 产品蓝图、开发说明、迁移交接
+├── docs/                    # 文档索引与分区：product / development / packaging / status / handoff / acceptance / optimization / notes
 ├── assets/demo/             # README 截图和动图
 ├── output/                  # 本地构建产物和验收截图，不进入 Git
-├── README.md                # GitHub 展示页
-├── INSTRUCTIONS.md          # 项目维护规则
-├── PROGRESS.md              # 进度记录
-└── SOP-绿色版更新.md        # 绿色版更新流程
+├── AGENTS.md                # Agent 接手地图
+├── Makefile                 # 根目录开发命令快捷入口
+└── README.md                # GitHub 展示页
 ```
 
 ## 当前边界

@@ -127,7 +127,6 @@ list_markdown_files(folderPath) -> FolderMarkdownFile[]
 ## 推荐新 session 启动语
 
 ```text
-请读取 docs/tauri-handoff.md，继续把 Markdown 文档审阅标注工作台迁移为 Tauri 桌面版。
+请读取 docs/handoff/tauri-handoff.md，继续把 Markdown 文档审阅标注工作台迁移为 Tauri 桌面版。
 目标是保留现有 React UI，同时让应用能自动在原 Markdown 同目录同步生成 .review.md 和 .ai-notes.json。
 ```
-
