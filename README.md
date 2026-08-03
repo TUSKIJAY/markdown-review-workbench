@@ -4,12 +4,7 @@
 
 适合技术方案、投标稿、产品文档、汇报材料、Word 草稿这类需要反复审阅和定点修改的文档工作。
 
-## 当前仓库入口
-
-- [docs/README.md](docs/README.md)：项目文档索引，按 product / development / packaging / status / handoff / optimization 分区。
-- [AGENTS.md](AGENTS.md)：未来 Codex / Claude 接手本仓库的地图。
-- [docs/handoff/session-handoff.md](docs/handoff/session-handoff.md)：当前接手状态、下一步和风险。
-- [docs/status/PROGRESS.md](docs/status/PROGRESS.md)：历史状态账本和能力索引。
+完成标注后，工具会在原文档旁生成 `*.ai-notes.json` 和 `*.review.md`，让 Agent 定点执行、人继续复核，原始 `.md` / `.docx` 保持不变。
 
 ![工作台演示](assets/demo/markdown-review-workflow.gif)
 
@@ -157,3 +152,10 @@ npm run tauri:build -- --no-bundle
 ```
 
 这个工具负责把审阅意见整理好，真正的修改动作交给人或 Agent 执行。这样改稿更可追踪，也更不容易误伤原文。
+
+## 仓库文档入口
+
+- [docs/README.md](docs/README.md)：项目文档索引，按 product / development / packaging / status / handoff / optimization 分区。
+- [AGENTS.md](AGENTS.md)：Codex / Claude 接手本仓库的地图。
+- [docs/handoff/session-handoff.md](docs/handoff/session-handoff.md)：当前接手状态、下一步和风险。
+- [docs/status/PROGRESS.md](docs/status/PROGRESS.md)：历史状态账本和能力索引。
